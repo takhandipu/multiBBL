@@ -22,6 +22,7 @@ public:
     uint64_t multiline_mode;
     double ipc;
     uint64_t insert_as_many_as_possible;
+    uint64_t max_bbl_count;
     Settings(MyConfigWrapper &conf)
     {
         min_distance_cycle_count = string_to_u64(conf.lookup("min_distance_cycle_count","40"));
@@ -34,31 +35,34 @@ public:
         max_prefetch_length = string_to_u64(conf.lookup("max_prefetch_length", "8"));
         min_ratio_percentage = string_to_double(conf.lookup("min_ratio_percentage","0.99"));
         multiline_mode = string_to_u64(conf.lookup("multiline_mode", "1"));
-        insert_as_many_as_possible = string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
+        insert_as_many_as_possible = 1;//string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
+        max_bbl_count = string_to_u64(conf.lookup("max_bbl_count", "1"));
 
         ipc = ((1.0*total_dyn_ins_count)/total_cycles);
     }
     uint64_t get_min_distance()
     {
-        if(multiline_mode==1)//ASMDB static implementation
+        return 1;
+        /*if(multiline_mode==1)//ASMDB static implementation
         {
             return 51;
         }
         else //if(multiline_mode==2) //OUR
         {
             return min_distance_cycle_count;
-        }
+        }*/
     }
     uint64_t get_max_distance()
     {
-        if(multiline_mode==1)//ASMDB static implementation
+        return 200;
+        /*if(multiline_mode==1)//ASMDB static implementation
         {
             return 200;
         }
         else //if(multiline_mode==2) //OUR
         {
             return max_distance_cycle_count;
-        }
+        }*/
     }
 };
 #endif //SETTINGS_H_
