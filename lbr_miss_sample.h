@@ -260,6 +260,7 @@ public:
         {
             vector<uint64_t> ordered_candidate;
             all_misses[i]->get_candidates(ordered_candidate, settings, dynamic_cfg);
+            if(ordered_candidate.size()<1)continue;
             candidates.clear();
             for(uint64_t k=0;k<settings->max_bbl_count;k++)
             {
