@@ -17,6 +17,7 @@ class BBL
 public:
     uint64_t total_count;
     unordered_map<uint64_t,uint64_t> neighbor_count;
+    unordered_map<uint64_t,uint64_t> next_count;
     uint32_t instrs;
     uint32_t bytes;
     uint64_t average_cycles;
@@ -42,12 +43,31 @@ public:
             neighbor_count[neighbor_bbl]+=1;
         }
     }
+    void add_next(uint64_t neighbor_bbl)
+    {
+        if(next_count.find(neighbor_bbl)==next_count.end())
+        {
+            next_count[neighbor_bbl]=1;
+        }
+        else
+        {
+            next_count[neighbor_bbl]+=1;
+        }
+    }
     double get_neighbor_ratio(uint64_t neighbor_bbl)
     {
         if(total_count<1)panic("Neighbor ratio is called on a BBL with 0 dynamic count");
         double denominator = total_count;
         double numerator = 0;
         if(neighbor_count.find(neighbor_bbl)!=neighbor_count.end())numerator+=neighbor_count[neighbor_bbl];
+        return numerator/denominator;
+    }
+    double get_next_ratio(uint64_t neighbor_bbl)
+    {
+        if(total_count<1)panic("Neighbor ratio is called on a BBL with 0 dynamic count");
+        double denominator = total_count;
+        double numerator = 0;
+        if(next_count.find(neighbor_bbl)!=next_count.end())numerator+=next_count[neighbor_bbl];
         return numerator/denominator;
     }
     uint64_t get_count()
@@ -178,6 +198,7 @@ public:
             uint64_t current_distance = 0;
             for(uint64_t j = i+1; j < ordered_bbl_trace.size(); j++)
             {
+                if(j==i+1)bbl_infos[bbl_address]->add_next(ordered_bbl_trace[j].first);
                 if(sim_settings->multiline_mode == 1)//ASMDB
                 {
                     current_distance+=bbl_infos[ordered_bbl_trace[j-1].first]->instrs;
@@ -200,6 +221,17 @@ public:
             panic("Trying to calculate fan-out of a predecessor basic block not present in the trace");
         }
         return bbl_infos[predecessor_bbl_address]->get_neighbor_ratio(successor_bbl_address);
+    }
+    double get_next_out(uint64_t predecessor_bbl_address, uint64_t successor_bbl_address)
+    {
+        if(bbl_infos.find(predecessor_bbl_address)==bbl_infos.end())
+        {
+            //return 1;
+            cerr<<predecessor_bbl_address<<endl;
+            cerr<<successor_bbl_address<<endl;
+            panic("Trying to calculate fan-out of a predecessor basic block not present in the trace");
+        }
+        return bbl_infos[predecessor_bbl_address]->get_next_ratio(successor_bbl_address);
     }
     bool is_valid_candidate(uint64_t predecessor_bbl_address, uint64_t successor_bbl_address)
     {

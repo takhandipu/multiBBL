@@ -288,8 +288,9 @@ public:
             vector<uint64_t> all;
             string_to_vec(tmp, all);
             if(all.size()<1)continue;
+            reverse(all.begin(),all.end());
             uint64_t converged_bbl_count = dynamic_cfg->get_bbl_execution_count(all[0]);
-            for(uint64_t i=1;i<all.size();i++)converged_bbl_count*=dynamic_cfg->get_fan_out(all[i-1],all[i]);
+            for(uint64_t i=1;i<all.size();i++)converged_bbl_count*=dynamic_cfg->get_next_out(all[i-1],all[i]);
             sorted_candidates.push_back(Candidate(all, ((1.0*it.second)/(converged_bbl_count))));
         }
         sort(sorted_candidates.begin(),sorted_candidates.end());
@@ -486,8 +487,9 @@ public:
                     vector<uint64_t> all;
                     string_to_vec(prefetch_candidate, all);
                     if(all.size()<1)continue;
+                    reverse(all.begin(),all.end());
                     uint64_t converged_bbl_count = dynamic_cfg->get_bbl_execution_count(all[0]);
-                    for(uint64_t k=1;k<all.size();k++)converged_bbl_count*=dynamic_cfg->get_fan_out(all[i-1],all[i]);
+                    for(uint64_t k=1;k<all.size();k++)converged_bbl_count*=dynamic_cfg->get_next_out(all[k-1],all[k]);
                     //
                     
                     uint64_t inserted_prefetch_count = converged_bbl_count;//dynamic_cfg->get_bbl_execution_count(prefetch_candidate);
@@ -607,8 +609,9 @@ public:
                     vector<uint64_t> all;
                     string_to_vec(prefetch_candidate, all);
                     if(all.size()<1)continue;
+                    reverse(all.begin(),all.end());
                     uint64_t converged_bbl_count = dynamic_cfg->get_bbl_execution_count(all[0]);
-                    for(uint64_t k=1;k<all.size();k++)converged_bbl_count*=dynamic_cfg->get_fan_out(all[i-1],all[i]);
+                    for(uint64_t k=1;k<all.size();k++)converged_bbl_count*=dynamic_cfg->get_next_out(all[k-1],all[k]);
                     //
                     
                     uint64_t inserted_prefetch_count = converged_bbl_count;//dynamic_cfg->get_bbl_execution_count(prefetch_candidate);

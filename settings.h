@@ -42,27 +42,25 @@ public:
     }
     uint64_t get_min_distance()
     {
-        return 1;
-        /*if(multiline_mode==1)//ASMDB static implementation
+        if(multiline_mode==1)//ASMDB static implementation
         {
             return 51;
         }
         else //if(multiline_mode==2) //OUR
         {
             return min_distance_cycle_count;
-        }*/
+        }
     }
     uint64_t get_max_distance()
     {
-        return 200;
-        /*if(multiline_mode==1)//ASMDB static implementation
+        if(multiline_mode==1)//ASMDB static implementation
         {
             return 200;
         }
         else //if(multiline_mode==2) //OUR
         {
             return max_distance_cycle_count;
-        }*/
+        }
     }
 };
 #endif //SETTINGS_H_
