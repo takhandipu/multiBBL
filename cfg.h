@@ -17,7 +17,6 @@ class BBL
 public:
     uint64_t total_count;
     unordered_map<uint64_t,uint64_t> neighbor_count;
-    unordered_map<uint64_t,uint64_t> next_count;
     uint32_t instrs;
     uint32_t bytes;
     uint64_t average_cycles;
@@ -43,31 +42,12 @@ public:
             neighbor_count[neighbor_bbl]+=1;
         }
     }
-    void add_next(uint64_t neighbor_bbl)
-    {
-        if(next_count.find(neighbor_bbl)==next_count.end())
-        {
-            next_count[neighbor_bbl]=1;
-        }
-        else
-        {
-            next_count[neighbor_bbl]+=1;
-        }
-    }
     double get_neighbor_ratio(uint64_t neighbor_bbl)
     {
         if(total_count<1)panic("Neighbor ratio is called on a BBL with 0 dynamic count");
         double denominator = total_count;
         double numerator = 0;
         if(neighbor_count.find(neighbor_bbl)!=neighbor_count.end())numerator+=neighbor_count[neighbor_bbl];
-        return numerator/denominator;
-    }
-    double get_next_ratio(uint64_t neighbor_bbl)
-    {
-        if(total_count<1)panic("Neighbor ratio is called on a BBL with 0 dynamic count");
-        double denominator = total_count;
-        double numerator = 0;
-        if(next_count.find(neighbor_bbl)!=next_count.end())numerator+=next_count[neighbor_bbl];
         return numerator/denominator;
     }
     uint64_t get_count()
@@ -83,10 +63,37 @@ private:
     uint64_t static_size;
     uint64_t static_count;
     Settings *sim_settings;
+    set<uint64_t> self_modifying_bbls;
 public:
     CFG(MyConfigWrapper &conf, Settings &settings)
     {
         sim_settings = &settings;
+
+        string self_modifying_bbl_info_path = conf.lookup("bbl_info_self_modifying", "/tmp/");
+        if(self_modifying_bbl_info_path == "/tmp/")
+        {
+            //do nothing
+            //since self modifying bbls are optional only for jitted codes
+        }
+        else
+        {
+            vector<string> raw_self_modifying_bbl_info_data;
+            read_full_file(self_modifying_bbl_info_path, raw_self_modifying_bbl_info_data);
+            for(uint64_t i = 0; i<raw_self_modifying_bbl_info_data.size(); i++)
+            {
+                string line = raw_self_modifying_bbl_info_data[i];
+                boost::trim_if(line,boost::is_any_of(","));
+                vector<string> parsed;
+                boost::split(parsed,line,boost::is_any_of(",\n"),boost::token_compress_on);
+                if(parsed.size()!=3)
+                {
+                    panic("A line on the self-modifying BBL info file does not have exactly three tuples");
+                }
+                uint64_t bbl_address = string_to_u64(parsed[0]);
+                self_modifying_bbls.insert(bbl_address);
+            }
+            raw_self_modifying_bbl_info_data.clear();
+        }
         
         string bbl_info_path = conf.lookup("bbl_info", "/tmp/");
         if(bbl_info_path == "/tmp/")
@@ -196,9 +203,9 @@ public:
                 bbl_infos[bbl_address]->increment();
             }
             uint64_t current_distance = 0;
+            set<uint64_t> already_added_neighbors;
             for(uint64_t j = i+1; j < ordered_bbl_trace.size(); j++)
             {
-                if(j==i+1)bbl_infos[bbl_address]->add_next(ordered_bbl_trace[j].first);
                 if(sim_settings->multiline_mode == 1)//ASMDB
                 {
                     current_distance+=bbl_infos[ordered_bbl_trace[j-1].first]->instrs;
@@ -209,10 +216,17 @@ public:
                 }
                 if(current_distance<min_distance)continue;
                 if(current_distance>max_distance)break;
+                if(already_added_neighbors.find(ordered_bbl_trace[j].first)!=already_added_neighbors.end())continue;
                 bbl_infos[bbl_address]->add_neighbor(ordered_bbl_trace[j].first);
+                already_added_neighbors.insert(ordered_bbl_trace[j].first);
             }
+            already_added_neighbors.clear();
         }
         ordered_bbl_trace.clear();
+    }
+    bool is_self_modifying(uint64_t bbl_address)
+    {
+        return self_modifying_bbls.find(bbl_address) != self_modifying_bbls.end();
     }
     double get_fan_out(uint64_t predecessor_bbl_address, uint64_t successor_bbl_address)
     {
@@ -222,19 +236,9 @@ public:
         }
         return bbl_infos[predecessor_bbl_address]->get_neighbor_ratio(successor_bbl_address);
     }
-    double get_next_out(uint64_t predecessor_bbl_address, uint64_t successor_bbl_address)
-    {
-        if(bbl_infos.find(predecessor_bbl_address)==bbl_infos.end())
-        {
-            //return 1;
-            cerr<<predecessor_bbl_address<<endl;
-            cerr<<successor_bbl_address<<endl;
-            panic("Trying to calculate fan-out of a predecessor basic block not present in the trace");
-        }
-        return bbl_infos[predecessor_bbl_address]->get_next_ratio(successor_bbl_address);
-    }
     bool is_valid_candidate(uint64_t predecessor_bbl_address, uint64_t successor_bbl_address)
     {
+        if(is_self_modifying(predecessor_bbl_address))return false;
         return get_fan_out(predecessor_bbl_address, successor_bbl_address) >= sim_settings->fan_out_ratio;
     }
     uint64_t get_bbl_execution_count(uint64_t bbl_address)

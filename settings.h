@@ -22,7 +22,6 @@ public:
     uint64_t multiline_mode;
     double ipc;
     uint64_t insert_as_many_as_possible;
-    uint64_t max_bbl_count;
     Settings(MyConfigWrapper &conf)
     {
         min_distance_cycle_count = string_to_u64(conf.lookup("min_distance_cycle_count","40"));
@@ -35,8 +34,7 @@ public:
         max_prefetch_length = string_to_u64(conf.lookup("max_prefetch_length", "8"));
         min_ratio_percentage = string_to_double(conf.lookup("min_ratio_percentage","0.99"));
         multiline_mode = string_to_u64(conf.lookup("multiline_mode", "1"));
-        insert_as_many_as_possible = 1;//string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
-        max_bbl_count = string_to_u64(conf.lookup("max_bbl_count", "1"));
+        insert_as_many_as_possible = string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
 
         ipc = ((1.0*total_dyn_ins_count)/total_cycles);
     }
@@ -44,7 +42,7 @@ public:
     {
         if(multiline_mode==1)//ASMDB static implementation
         {
-            return 51;
+            return min_distance_cycle_count*ipc;
         }
         else //if(multiline_mode==2) //OUR
         {
@@ -55,7 +53,7 @@ public:
     {
         if(multiline_mode==1)//ASMDB static implementation
         {
-            return 200;
+            return max_distance_cycle_count*ipc;
         }
         else //if(multiline_mode==2) //OUR
         {
