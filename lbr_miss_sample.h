@@ -371,7 +371,7 @@ public:
             out<<sorted_counts[i]<<" "<<((100.0*value)/total)<<endl;
         }
     }
-    void generate_prefetch_locations(Settings *settings, CFG *dynamic_cfg, ofstream &out, bool multiline_enabled)
+    void generate_prefetch_locations(Settings *settings, CFG *dynamic_cfg, ofstream &out)
     {
         unordered_map<uint64_t,vector<uint64_t>> bbl_to_prefetch_targets;
         
@@ -387,298 +387,131 @@ public:
 
         uint64_t total_miss_sample_count = total_misses();
         
-        if(multiline_enabled)
+        unordered_map<uint64_t,unordered_map<uint64_t,uint64_t>> neighbors;
+        for(uint64_t i = 0; i < miss_profile.size(); i++)
         {
-            unordered_map<uint64_t,unordered_map<uint64_t,uint64_t>> neighbors;
-            for(uint64_t i = 0; i < miss_profile.size(); i++)
+            uint64_t missed_pc = miss_profile[i];
+            if(neighbors.find(missed_pc)==neighbors.end())
             {
-                uint64_t missed_pc = miss_profile[i];
-                if(neighbors.find(missed_pc)==neighbors.end())
+                neighbors[missed_pc]=unordered_map<uint64_t,uint64_t>();
+            }
+            for(uint64_t j = 1; j<= settings->max_step_ahead; j++)
+            {
+                if(i+j>=miss_profile.size())break;
+                uint64_t neighbor_missed_pc = miss_profile[i+j];
+                int prefetch_length = measure_prefetch_length(missed_pc, neighbor_missed_pc);
+                if(my_abs(prefetch_length)<=settings->max_prefetch_length)
                 {
-                    neighbors[missed_pc]=unordered_map<uint64_t,uint64_t>();
-                }
-                for(uint64_t j = 1; j<= settings->max_step_ahead; j++)
-                {
-                    if(i+j>=miss_profile.size())break;
-                    uint64_t neighbor_missed_pc = miss_profile[i+j];
-                    int prefetch_length = measure_prefetch_length(missed_pc, neighbor_missed_pc);
-                    if(my_abs(prefetch_length)<=settings->max_prefetch_length)
+                    if(prefetch_length==0)continue;
+                    if(neighbors[missed_pc].find(prefetch_length)==neighbors[missed_pc].end())
                     {
-                        if(prefetch_length==0)continue;
-                        if(neighbors[missed_pc].find(prefetch_length)==neighbors[missed_pc].end())
-                        {
-                            neighbors[missed_pc][neighbor_missed_pc]=1;
-                        }
-                        else
-                        {
-                            neighbors[missed_pc][neighbor_missed_pc]+=1;
-                        }
+                        neighbors[missed_pc][neighbor_missed_pc]=1;
+                    }
+                    else
+                    {
+                        neighbors[missed_pc][neighbor_missed_pc]+=1;
                     }
                 }
             }
-            vector<prefetch_benefit> multiline_sorted_missed_pcs;
-            map<uint64_t,vector<uint64_t>> prefetch_lists;
-            for(int i=0;i<sorted_miss_pcs.size();i++)
-            {
-                uint64_t current_pc = sorted_miss_pcs[i].second;
-                uint64_t prefetch_count = sorted_miss_pcs[i].first;
-                uint64_t covered_miss_count = prefetch_count;
-                prefetch_lists[current_pc]=vector<uint64_t>();
-                prefetch_lists[current_pc].push_back(current_pc);
-                for(auto it: neighbors[current_pc])
-                {
-                    double ratio_percentage = (1.0 * it.second) / prefetch_count;
-                    if(ratio_percentage>=settings->min_ratio_percentage)
-                    {
-                        covered_miss_count+=it.second;
-                        prefetch_lists[current_pc].push_back(it.first);
-                    }
-                }
-                multiline_sorted_missed_pcs.push_back(prefetch_benefit(current_pc, prefetch_count, covered_miss_count));
-            }
-            sort(multiline_sorted_missed_pcs.begin(), multiline_sorted_missed_pcs.end());
-            reverse(multiline_sorted_missed_pcs.begin(), multiline_sorted_missed_pcs.end());
-            
-            uint64_t permissible_prefetch_count = settings->dyn_ins_count_inc_ratio * settings->total_dyn_ins_count;
-            uint64_t current_running_count = 0;
-            bool prefetch_count_finished = false;
-            bbl_to_prefetch_targets.clear();
-            uint64_t total_covered_miss_count=0;
-            set<uint64_t> omit_list;
-            while(current_running_count<permissible_prefetch_count)
-            {
-                vector<benefit> candidates;
-                for(int i =0; i<multiline_sorted_missed_pcs.size(); i++)
-                {
-                    uint64_t missed_pc = multiline_sorted_missed_pcs[i].addr;
-                    unordered_map<uint64_t,uint64_t> candidate_counts;
-                    missed_pc_to_LBR_sample_list[missed_pc]->get_candidate_counts(candidate_counts,settings,omit_list,dynamic_cfg);
-                    for(auto it : candidate_counts)
-                    {
-                        uint64_t predecessor_bbl_address = it.first;
-                        if(settings->insert_as_many_as_possible == 0)
-                        {
-                            bool candidate_valid = dynamic_cfg->is_valid_candidate(predecessor_bbl_address, missed_pc);
-                            if(!candidate_valid)continue;
-                        }
-                        uint64_t miss_count = it.second;
-                        double fan_in = dynamic_cfg->get_fan_out(predecessor_bbl_address, missed_pc);
-                        candidates.push_back(benefit(missed_pc,predecessor_bbl_address,miss_count,fan_in));
-                    }
-                    candidate_counts.clear();
-                }
-                if(candidates.size()==0)break;
-                sort(candidates.begin(), candidates.end());
-                reverse(candidates.begin(),candidates.end());
-                set<uint64_t> updated_miss_bbl_addresses;
-                for(int i = 0; i< candidates.size(); i++)
-                {   
-                    benefit &best_candidate = candidates[i];
-                    uint64_t prefetch_candidate = best_candidate.predecessor_bbl_address;
-                    uint64_t missed_pc = best_candidate.missed_bbl_address;
-                    
-                    if(updated_miss_bbl_addresses.find(missed_pc)!=updated_miss_bbl_addresses.end())break;
-                    updated_miss_bbl_addresses.insert(missed_pc);
-
-                    uint64_t inserted_prefetch_count = dynamic_cfg->get_bbl_execution_count(prefetch_candidate);
-
-                    if( bbl_to_prefetch_targets.find(prefetch_candidate)==bbl_to_prefetch_targets.end() )bbl_to_prefetch_targets[prefetch_candidate]=vector<uint64_t>();
-                    else if(bbl_to_prefetch_targets[prefetch_candidate].size()>0)
-                    {
-                        //Check if all the previous prefetch targets and this target are nearby
-                        //if yes, okay
-                        //else, not okay
-                        uint64_t first_inserted_target = bbl_to_prefetch_targets[prefetch_candidate][0];
-                        int prefetch_length = measure_prefetch_length(missed_pc, first_inserted_target);
-                        if(my_abs(prefetch_length)<=settings->max_prefetch_length)
-                        {
-                            //this is good to insert
-                            //and there is no extra static or dynamic instruction insert
-                            //benfit
-                            inserted_prefetch_count = 0;
-                        }
-                    }
-                    
-                    uint64_t covered_miss_count = 0;
-                    bbl_to_prefetch_targets[prefetch_candidate].push_back(missed_pc);
-                    covered_miss_count+=missed_pc_to_LBR_sample_list[missed_pc]->remove_covered_misses(prefetch_candidate, settings, dynamic_cfg);
-                    
-                    current_running_count += inserted_prefetch_count;
-                    total_covered_miss_count+=covered_miss_count;
-
-                    if(current_running_count >= permissible_prefetch_count)break;
-                }
-                updated_miss_bbl_addresses.clear();
-                candidates.clear();
-            }
-            /*for(int i=0;i<multiline_sorted_missed_pcs.size();i++)
-            {
-                if(prefetch_count_finished)break;
-                uint64_t missed_pc = multiline_sorted_missed_pcs[i].addr;
-                uint64_t missed_count_for_this_pc = multiline_sorted_missed_pcs[i].prefetch_count;
-                uint64_t prefetch_candidate;
-                set<uint64_t> omit_list;
-                while(missed_count_for_this_pc>0)
-                {
-                    bool candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_next_candidate(&prefetch_candidate, settings, omit_list, dynamic_cfg);
-                    if(!candidate_found)break;
-                    
-                    omit_list.insert(prefetch_candidate);
-                    
-                    if(settings->insert_as_many_as_possible == 0)
-                    {
-                        bool candidate_valid = dynamic_cfg->is_valid_candidate(prefetch_candidate, missed_pc);
-                        if(!candidate_valid)continue;
-                    }
-                    
-                    uint64_t inserted_prefetch_count = dynamic_cfg->get_bbl_execution_count(prefetch_candidate);
-                    
-                    if( bbl_to_prefetch_targets.find(prefetch_candidate)==bbl_to_prefetch_targets.end() )bbl_to_prefetch_targets[prefetch_candidate]=vector<uint64_t>();
-                    else if(bbl_to_prefetch_targets[prefetch_candidate].size()>0)
-                    {
-                        //Check if all the previous prefetch targets and this target are nearby
-                        //if yes, okay
-                        //else, not okay
-                        uint64_t first_inserted_target = bbl_to_prefetch_targets[prefetch_candidate][0];
-                        int prefetch_length = measure_prefetch_length(missed_pc, first_inserted_target);
-                        if(my_abs(prefetch_length)<=settings->max_prefetch_length)
-                        {
-                            //this is good to insert
-                            //and there is no extra static or dynamic instruction insert
-                            //benfit
-                            inserted_prefetch_count = 0;
-                        }
-                        else
-                        {
-                            if(settings->insert_as_many_as_possible == 0)continue;
-                        }
-                    }
-                    
-                    if(settings->insert_as_many_as_possible == 0)
-                    {
-                        if(current_running_count+inserted_prefetch_count >= permissible_prefetch_count+100)
-                        {
-                            if(bbl_to_prefetch_targets[prefetch_candidate].size()==0)bbl_to_prefetch_targets.erase(prefetch_candidate);
-                            continue;
-                        }
-                    }
-                    
-                    uint64_t covered_miss_count = 0;
-                    bbl_to_prefetch_targets[prefetch_candidate].push_back(missed_pc);
-                    covered_miss_count+=missed_pc_to_LBR_sample_list[missed_pc]->remove_covered_misses(prefetch_candidate, settings, dynamic_cfg);
-                    missed_count_for_this_pc-=covered_miss_count;
-                    
-                    current_running_count += inserted_prefetch_count;
-                    total_covered_miss_count+=covered_miss_count;
-                    
-                    if(settings->insert_as_many_as_possible == 0)
-                    {
-                        if(current_running_count>=permissible_prefetch_count)
-                        {
-                            prefetch_count_finished=true;
-                            break;
-                        }
-                    }
-                }
-            }*/
-            uint64_t static_prefetch_count = 0;
-
-            uint8_t size_of_prefetch_inst = (7+((settings->max_prefetch_length*1)/8));
-            unordered_map<uint64_t,uint64_t> prev_to_new;
-            dynamic_cfg->print_modified_bbl_mappings(bbl_to_prefetch_targets, size_of_prefetch_inst, bbl_mapping_out, prev_to_new);
-
-            vector<uint64_t> tmp;
-            for(auto it:bbl_to_prefetch_targets)
-            {
-                tmp.push_back(it.first);
-            }
-            sort(tmp.begin(), tmp.end());
-            for(uint64_t bbl_addr: tmp)
-            {
-                auto it = bbl_to_prefetch_targets[bbl_addr];
-                if(it.size()<1)continue;
-                out<<prev_to_new[bbl_addr]<<" "<<it.size();
-                for(auto set_it: it)
-                {
-                    out<<" "<<prev_to_new[set_it];
-                }
-                out<<endl;
-                static_prefetch_count++;
-            }
-            tmp.clear();
-            prev_to_new.clear();
-            cerr<<total_covered_miss_count<<","<<(100.0*total_covered_miss_count)/total_miss_sample_count<<","<<current_running_count<<","<<(100.0*current_running_count)/settings->total_dyn_ins_count<<endl;
-            uint64_t total_count = dynamic_cfg->get_static_count();
-            cerr<<"Static counts: "<<static_prefetch_count<<","<<total_count<<","<<(100.0*static_prefetch_count)/total_count<<endl;
-            uint64_t total_size = dynamic_cfg->get_static_size();
-            double static_prefetch_size = static_prefetch_count*size_of_prefetch_inst;
-            cerr<<"Static size: "<<static_prefetch_size<<","<<total_size<<","<<(100.0*static_prefetch_size)/total_size<<endl;
         }
-        else
+        vector<prefetch_benefit> multiline_sorted_missed_pcs;
+        map<uint64_t,vector<uint64_t>> prefetch_lists;
+        for(int i=0;i<sorted_miss_pcs.size();i++)
         {
-            uint64_t permissible_prefetch_count = settings->dyn_ins_count_inc_ratio * settings->total_dyn_ins_count;
-            uint64_t current_running_count = 0;
-            bool prefetch_count_finished = false;
-            bbl_to_prefetch_targets.clear();
-            uint64_t total_covered_miss_count=0;
-            for(int i=0;i<sorted_miss_pcs.size();i++)
+            uint64_t current_pc = sorted_miss_pcs[i].second;
+            uint64_t prefetch_count = sorted_miss_pcs[i].first;
+            uint64_t covered_miss_count = prefetch_count;
+            prefetch_lists[current_pc]=vector<uint64_t>();
+            prefetch_lists[current_pc].push_back(current_pc);
+            for(auto it: neighbors[current_pc])
             {
-                if(prefetch_count_finished)break;
-                uint64_t missed_pc = sorted_miss_pcs[i].second;
-                uint64_t missed_count_for_this_pc = sorted_miss_pcs[i].first;
-                uint64_t prefetch_candidate;
-                set<uint64_t> omit_list;
-                while(missed_count_for_this_pc>0)
+                double ratio_percentage = (1.0 * it.second) / prefetch_count;
+                if(ratio_percentage>=settings->min_ratio_percentage)
                 {
-                    bool candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_next_candidate(&prefetch_candidate, settings, omit_list, dynamic_cfg);
-                    if(!candidate_found)break;
-                    
-                    omit_list.insert(prefetch_candidate);
-                    
-                    bool candidate_valid = dynamic_cfg->is_valid_candidate(prefetch_candidate, missed_pc);
-                    if(!candidate_valid)continue;
-                    
-                    uint64_t inserted_prefetch_count = dynamic_cfg->get_bbl_execution_count(prefetch_candidate);
-                    if(current_running_count+inserted_prefetch_count >= permissible_prefetch_count+100)continue;
-                    
-                    if( bbl_to_prefetch_targets.find(prefetch_candidate)==bbl_to_prefetch_targets.end() )bbl_to_prefetch_targets[prefetch_candidate]=vector<uint64_t>();
-                    else continue;
-                    
-                    bbl_to_prefetch_targets[prefetch_candidate].push_back(missed_pc);
-                    current_running_count += inserted_prefetch_count;
-                    uint64_t covered_miss_count = missed_pc_to_LBR_sample_list[missed_pc]->remove_covered_misses(prefetch_candidate, settings, dynamic_cfg);
-                    missed_count_for_this_pc-=covered_miss_count;
-                    total_covered_miss_count+=covered_miss_count;
-                    
-                    if(current_running_count>=permissible_prefetch_count)
-                    {
-                        prefetch_count_finished=true;
-                        break;
-                    }
+                    covered_miss_count+=it.second;
+                    prefetch_lists[current_pc].push_back(it.first);
                 }
             }
-            uint64_t static_prefetch_count = 0;
-
-            unordered_map<uint64_t,uint64_t> prev_to_new;
-            dynamic_cfg->print_modified_bbl_mappings(bbl_to_prefetch_targets, 7, bbl_mapping_out, prev_to_new);
-            for(auto it:bbl_to_prefetch_targets)
-            {
-                if(it.second.size()<1)continue;
-                out<<prev_to_new[it.first]<<" "<<it.second.size();
-                for(auto set_it: it.second)
-                {
-                    out<<" "<<prev_to_new[set_it];
-                }
-                out<<endl;
-                static_prefetch_count++;
-            }
-            cerr<<total_covered_miss_count<<","<<(100.0*total_covered_miss_count)/total_miss_sample_count<<","<<current_running_count<<","<<(100.0*current_running_count)/settings->total_dyn_ins_count<<endl;
-            uint64_t total_count = dynamic_cfg->get_static_count();
-            cerr<<"Static counts: "<<static_prefetch_count<<","<<total_count<<","<<(100.0*static_prefetch_count)/total_count<<endl;
-            uint64_t total_size = dynamic_cfg->get_static_size();
-            cerr<<"Static size: "<<static_prefetch_count*7<<","<<total_size<<","<<(700.0*static_prefetch_count)/total_size<<endl;
+            multiline_sorted_missed_pcs.push_back(prefetch_benefit(current_pc, prefetch_count, covered_miss_count));
         }
+        sort(multiline_sorted_missed_pcs.begin(), multiline_sorted_missed_pcs.end());
+        reverse(multiline_sorted_missed_pcs.begin(), multiline_sorted_missed_pcs.end());
         
+        uint64_t permissible_prefetch_count = settings->dyn_ins_count_inc_ratio * settings->total_dyn_ins_count;
+        uint64_t current_running_count = 0;
+        bool prefetch_count_finished = false;
+        bbl_to_prefetch_targets.clear();
+        uint64_t total_covered_miss_count=0;
+        set<uint64_t> omit_list;
+        vector<benefit> candidates;
+        for(int i =0; i<sorted_miss_pcs.size(); i++)
+        {
+            uint64_t missed_pc = sorted_miss_pcs[i].second;
+            unordered_map<uint64_t,uint64_t> candidate_counts;
+            missed_pc_to_LBR_sample_list[missed_pc]->get_candidate_counts(candidate_counts,settings,omit_list,dynamic_cfg);
+            for(auto it : candidate_counts)
+            {
+                uint64_t predecessor_bbl_address = it.first;
+                if(dynamic_cfg->get_fan_out(predecessor_bbl_address,missed_pc) < 0.99)continue;
+                uint64_t miss_count = it.second;
+                double fan_in = dynamic_cfg->get_fan_out(predecessor_bbl_address, missed_pc);
+                candidates.push_back(benefit(missed_pc,predecessor_bbl_address,miss_count,fan_in));
+            }
+            candidate_counts.clear();
+        }
+        sort(candidates.begin(), candidates.end());
+        reverse(candidates.begin(),candidates.end());
+        for(int i = 0; i< candidates.size(); i++)
+        {   
+            benefit &best_candidate = candidates[i];
+            uint64_t prefetch_candidate = best_candidate.predecessor_bbl_address;
+            uint64_t missed_pc = best_candidate.missed_bbl_address;
+            
+            uint64_t inserted_prefetch_count = dynamic_cfg->get_bbl_execution_count(prefetch_candidate);
+
+            if( bbl_to_prefetch_targets.find(prefetch_candidate)==bbl_to_prefetch_targets.end() )bbl_to_prefetch_targets[prefetch_candidate]=vector<uint64_t>();
+            else if(bbl_to_prefetch_targets[prefetch_candidate].size()>0)
+            {
+                //Check if all the previous prefetch targets and this target are nearby
+                //if yes, okay
+                //else, not okay
+                uint64_t first_inserted_target = bbl_to_prefetch_targets[prefetch_candidate][0];
+                int prefetch_length = measure_prefetch_length(missed_pc, first_inserted_target);
+                if(my_abs(prefetch_length)<=settings->max_prefetch_length)
+                {
+                    //this is good to insert
+                    //and there is no extra static or dynamic instruction insert
+                    //benfit
+                    inserted_prefetch_count = 0;
+                }
+            }
+            
+            uint64_t covered_miss_count = 0;
+            bbl_to_prefetch_targets[prefetch_candidate].push_back(missed_pc);
+            covered_miss_count+=missed_pc_to_LBR_sample_list[missed_pc]->remove_covered_misses(prefetch_candidate, settings, dynamic_cfg);
+            
+            current_running_count += inserted_prefetch_count;
+            total_covered_miss_count+=covered_miss_count;
+
+            //if(current_running_count >= permissible_prefetch_count)break;
+        }
+        candidates.clear();
+        uint64_t static_prefetch_count = 0;
+
+        uint8_t size_of_prefetch_inst = (7+((settings->max_prefetch_length*1)/8));
+        cerr<<total_covered_miss_count<<","<<(100.0*total_covered_miss_count)/total_miss_sample_count<<","<<current_running_count<<","<<(100.0*current_running_count)/settings->total_dyn_ins_count<<endl;
+        uint64_t total_count = dynamic_cfg->get_static_count();
+        cerr<<"Static counts: "<<static_prefetch_count<<","<<total_count<<","<<(100.0*static_prefetch_count)/total_count<<endl;
+        uint64_t total_size = dynamic_cfg->get_static_size();
+        double static_prefetch_size = static_prefetch_count*size_of_prefetch_inst;
+        cerr<<"Static size: "<<static_prefetch_size<<","<<total_size<<","<<(100.0*static_prefetch_size)/total_size<<endl;
+
+        for(int i =0; i<sorted_miss_pcs.size(); i++)
+        {
+            uint64_t missed_pc = sorted_miss_pcs[i].second;
+            /*uint64_t still_missing = missed_pc_to_LBR_sample_list[missed_pc]->size();
+            out<<missed_pc<<","<<still_missing<<endl;*/
+        }
     }
 };
 
@@ -686,7 +519,7 @@ class Miss_Profile
 {
 public:
     Miss_Map profile;
-    Miss_Profile(MyConfigWrapper &conf, Settings &settings, CFG &dynamic_cfg, bool measure_prefetch_window_cdf=false)
+    Miss_Profile(MyConfigWrapper &conf, Settings &settings, CFG &dynamic_cfg)
     {
         string miss_log_path = conf.lookup("miss_log", "/tmp/");
         if(miss_log_path == "/tmp/")
@@ -708,20 +541,7 @@ public:
         output_name+=to_string(int(settings.fan_out_ratio*100))+".";
         output_name+="txt";
         ofstream prefetch_out(output_name.c_str());
-        profile.set_bbl_mapping_out(("bbl."+output_name));
-        if(measure_prefetch_window_cdf)
-        {
-            ofstream prefetch_window_accessed_cache_line_count_cdf("prefetch_window_accessed_cache_line_count_cdf.txt");
-            profile.measure_prefetch_window_cdf(&settings,&dynamic_cfg, prefetch_window_accessed_cache_line_count_cdf);
-        }
-        if(settings.multiline_mode == 1)//ASMDB
-        {
-            profile.generate_prefetch_locations(&settings,&dynamic_cfg, prefetch_out, false);
-        }
-        else if(settings.multiline_mode == 2)//OUR
-        {
-            profile.generate_prefetch_locations(&settings,&dynamic_cfg, prefetch_out, true);
-        }
+        profile.generate_prefetch_locations(&settings,&dynamic_cfg, prefetch_out);
     }
 };
 

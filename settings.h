@@ -33,32 +33,18 @@ public:
         max_step_ahead = string_to_u64(conf.lookup("max_step_ahead", "10"));
         max_prefetch_length = string_to_u64(conf.lookup("max_prefetch_length", "8"));
         min_ratio_percentage = string_to_double(conf.lookup("min_ratio_percentage","0.99"));
-        multiline_mode = string_to_u64(conf.lookup("multiline_mode", "1"));
-        insert_as_many_as_possible = string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
+        multiline_mode = 2; //string_to_u64(conf.lookup("multiline_mode", "1"));
+        insert_as_many_as_possible = 0; //string_to_u64(conf.lookup("insert_as_many_as_possible", "0"));
 
         ipc = ((1.0*total_dyn_ins_count)/total_cycles);
     }
     uint64_t get_min_distance()
     {
-        if(multiline_mode==1)//ASMDB static implementation
-        {
-            return min_distance_cycle_count*ipc;
-        }
-        else //if(multiline_mode==2) //OUR
-        {
-            return min_distance_cycle_count;
-        }
+        return min_distance_cycle_count;
     }
     uint64_t get_max_distance()
     {
-        if(multiline_mode==1)//ASMDB static implementation
-        {
-            return max_distance_cycle_count*ipc;
-        }
-        else //if(multiline_mode==2) //OUR
-        {
-            return max_distance_cycle_count;
-        }
+        return max_distance_cycle_count;
     }
 };
 #endif //SETTINGS_H_
