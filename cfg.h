@@ -12,6 +12,16 @@ using namespace std;
 #include "convert.h"
 #include "settings.h"
 
+
+bool is_present(deque<uint64_t> &last_eight_bbls, uint64_t prior)
+{
+    for(uint64_t i = 0; i< last_eight_bbls.size(); i++)
+    {
+        if(last_eight_bbls[i]==prior)return true;
+    }
+    return false;
+}
+
 class BBL
 {
 public:
@@ -64,6 +74,7 @@ private:
     uint64_t static_count;
     Settings *sim_settings;
     set<uint64_t> self_modifying_bbls;
+    vector<uint64_t> full_ordered_bbls;
 public:
     CFG(MyConfigWrapper &conf, Settings &settings)
     {
@@ -131,7 +142,7 @@ public:
         }
         raw_bbl_info_data.clear();
         
-        vector<pair<uint64_t,uint64_t>> ordered_bbl_trace;
+        full_ordered_bbls.clear();
         string bbl_log_path = conf.lookup("bbl_log", "/tmp/");
         if(bbl_log_path == "/tmp/")
         {
@@ -167,7 +178,7 @@ public:
             }
             prev[0]=prev[1];
             prev[1]=bbl_address;
-            ordered_bbl_trace.push_back(make_pair(bbl_address,cycle));
+            full_ordered_bbls.push_back(bbl_address);
             parsed.clear();
         }
         raw_bbl_log_data.clear();
@@ -191,9 +202,9 @@ public:
         uint64_t min_distance = sim_settings->get_min_distance();
         uint64_t max_distance = sim_settings->get_max_distance();
         
-        for(uint64_t i = 0; i < ordered_bbl_trace.size(); i++)
+        for(uint64_t i = 0; i < full_ordered_bbls.size(); i++)
         {
-            uint64_t bbl_address = ordered_bbl_trace[i].first;
+            uint64_t bbl_address = full_ordered_bbls[i];
             if(bbl_infos.find(bbl_address)==bbl_infos.end())
             {
                 panic("BBL log file includes a BBL that is not present in BBL info file");
@@ -204,25 +215,24 @@ public:
             }
             uint64_t current_distance = 0;
             set<uint64_t> already_added_neighbors;
-            for(uint64_t j = i+1; j < ordered_bbl_trace.size(); j++)
+            for(uint64_t j = i+1; j < full_ordered_bbls.size(); j++)
             {
                 if(sim_settings->multiline_mode == 1)//ASMDB
                 {
-                    current_distance+=bbl_infos[ordered_bbl_trace[j-1].first]->instrs;
+                    current_distance+=bbl_infos[full_ordered_bbls[j-1]]->instrs;
                 }
                 else // if(settings.multiline_mode == 2) OUR
                 {
-                    current_distance+=bbl_infos[ordered_bbl_trace[j-1].first]->average_cycles;//ordered_bbl_trace[j].second;
+                    current_distance+=bbl_infos[full_ordered_bbls[j-1]]->average_cycles;//ordered_bbl_trace[j].second;
                 }
                 if(current_distance<min_distance)continue;
                 if(current_distance>max_distance)break;
-                if(already_added_neighbors.find(ordered_bbl_trace[j].first)!=already_added_neighbors.end())continue;
-                bbl_infos[bbl_address]->add_neighbor(ordered_bbl_trace[j].first);
-                already_added_neighbors.insert(ordered_bbl_trace[j].first);
+                if(already_added_neighbors.find(full_ordered_bbls[j])!=already_added_neighbors.end())continue;
+                bbl_infos[bbl_address]->add_neighbor(full_ordered_bbls[j]);
+                already_added_neighbors.insert(full_ordered_bbls[j]);
             }
             already_added_neighbors.clear();
         }
-        ordered_bbl_trace.clear();
     }
     bool is_self_modifying(uint64_t bbl_address)
     {
@@ -272,6 +282,53 @@ public:
     uint64_t get_bbl_size(uint64_t bbl_address)
     {
         return bbl_infos[bbl_address]->bytes;
+    }
+    double get_fan_in_for_multiple_prior_bbls(uint64_t miss_target, uint64_t candidate, uint64_t prior, uint64_t *dynamic_prefetch_counts)
+    {
+        deque<uint64_t> last_eight_bbls;
+        uint64_t down = 0;
+        uint64_t up = 0;
+
+        uint64_t min_distance = sim_settings->get_min_distance();
+        uint64_t max_distance = sim_settings->get_max_distance();
+        for(uint64_t i = 0; i<full_ordered_bbls.size(); i++)
+        {
+            if(full_ordered_bbls[i]==candidate && is_present(last_eight_bbls,prior))
+            {
+                down+=1;
+
+                uint64_t current_distance = 0;
+                for(uint64_t j = i+1; j < full_ordered_bbls.size(); j++)
+                {
+                    if(sim_settings->multiline_mode == 1)//ASMDB
+                    {
+                        current_distance+=bbl_infos[full_ordered_bbls[j-1]]->instrs;
+                    }
+                    else // if(settings.multiline_mode == 2) OUR
+                    {
+                        current_distance+=bbl_infos[full_ordered_bbls[j-1]]->average_cycles;//ordered_bbl_trace[j].second;
+                    }
+                    if(current_distance<min_distance)continue;
+                    if(current_distance>max_distance)break;
+                    if(full_ordered_bbls[j]==miss_target)
+                    {
+                        up+=1;
+                        break;
+                    }
+                }
+            }
+            if(last_eight_bbls.size()==8)
+            {
+                last_eight_bbls.pop_front();
+            }
+            last_eight_bbls.push_back(full_ordered_bbls[i]);
+        }
+        *dynamic_prefetch_counts = down;
+        if(down==0 || up==0)return 0;
+        double result = 1.0;
+        result *=up;
+        result /=down;
+        return result;
     }
     void print_modified_bbl_mappings(unordered_map<uint64_t,vector<uint64_t>> &bbl_to_prefetch_targets, uint8_t size_of_prefetch_inst, ofstream *out, unordered_map<uint64_t,uint64_t> &prev_to_new)
     {

@@ -88,6 +88,27 @@ struct benefit
     }
 };
 
+struct multi_bbl_benefit
+{
+    uint64_t missed_bbl_address;
+    uint64_t predecessor_bbl_address;
+    uint64_t predicate_bbl_address;
+    uint64_t covered_miss_counts;
+    double fan_in;
+    uint64_t dynamic_prefetch_counts;
+    multi_bbl_benefit (uint64_t m, uint64_t predecessor, uint64_t predicate, uint64_t c, double f, uint64_t d_p_counts) : missed_bbl_address(m), predecessor_bbl_address(predecessor), predicate_bbl_address(predicate), covered_miss_counts(c), fan_in(f), dynamic_prefetch_counts(d_p_counts) {}
+    bool operator < (const multi_bbl_benefit& right) const
+    {
+        if(right.fan_in>fan_in)return true;
+        else if(fan_in>right.fan_in)return false;
+        else
+        {
+            if(right.covered_miss_counts>covered_miss_counts)return true;
+            return false;
+        }
+    }
+};
+
 class LBR_Sample
 {
 public:
@@ -134,6 +155,42 @@ public:
             {
                 if(current_distance>max_distance)return;
                 candidates.insert(current_lbr[i].first);
+            }
+        }
+    }
+    void get_correlated_candidates(uint64_t top_candidate, set<uint64_t> &candidates, Settings *settings, CFG *dynamic_cfg)
+    {
+        candidates.clear();
+        uint64_t current_distance = 0;
+        
+        
+        uint64_t min_distance = settings->get_min_distance();
+        uint64_t max_distance = settings->get_max_distance();
+        
+        for(uint64_t i = 0; i<current_lbr.size(); i++)
+        {
+            if(settings->multiline_mode == 1)//ASMDB
+            {
+                current_distance+=dynamic_cfg->get_bbl_instr_count(current_lbr[i].first);
+            }
+            else // if(settings.multiline_mode == 2) OUR
+            {
+                current_distance+=dynamic_cfg->get_bbl_avg_cycles(current_lbr[i].first);//current_lbr[i].second;
+            }
+            if(current_distance>=min_distance)
+            {
+                if(current_distance>max_distance)return;
+                //candidates.insert(current_lbr[i].first);
+                if(current_lbr[i].first == top_candidate)
+                {
+                    //insert previous 8 BBLs on the candidate list
+                    for(uint64_t j=i+1; (j<current_lbr.size() && j<i+9); j++)
+                    {
+                        if(current_lbr[j].first == top_candidate)continue;
+                        candidates.insert(current_lbr[j].first);
+                    }
+                    return;
+                }
             }
         }
     }
@@ -259,6 +316,33 @@ public:
         *result = sorted_candidates[0].predecessor_bbl_address;
         return true;
     }
+    bool get_top_candidate(vector<uint64_t> &result, Settings *settings, CFG *dynamic_cfg)
+    {
+        result.clear();
+        unordered_map<uint64_t,uint64_t> candidate_counts;
+        set<uint64_t> candidates;
+        for(uint64_t i=0;i<all_misses.size();i++)
+        {
+            all_misses[i]->get_candidates(candidates, settings, dynamic_cfg);
+            for(auto it: candidates)
+            {
+                if(candidate_counts.find(it)==candidate_counts.end())candidate_counts[it]=1;
+                else candidate_counts[it]+=1;
+            }
+        }
+        vector<Candidate> sorted_candidates;
+        for(auto it: candidate_counts)
+        {
+            sorted_candidates.push_back(Candidate(it.first, it.second));
+        }
+        sort(sorted_candidates.begin(),sorted_candidates.end());
+        reverse(sorted_candidates.begin(),sorted_candidates.end());
+        if(sorted_candidates.size()<1)return false;
+        for(int i=0;i<sorted_candidates.size();i++)result.push_back(sorted_candidates[i].predecessor_bbl_address);
+        sorted_candidates.clear();
+        candidate_counts.clear();
+        return true;
+    }
     void get_candidate_counts(unordered_map<uint64_t,uint64_t> &candidate_counts, Settings *settings, set<uint64_t> &omit_list, CFG *dynamic_cfg)
     {
         set<uint64_t> candidates;
@@ -295,6 +379,34 @@ public:
             all_misses.push_back(tmp[i]);
         }
         return total;
+    }
+    bool get_top_correlated_candidate(uint64_t *result, uint64_t *covered_miss_count, uint64_t next, Settings *settings, CFG *dynamic_cfg)
+    {
+        unordered_map<uint64_t,uint64_t> candidate_counts;
+        set<uint64_t> candidates;
+        for(uint64_t i=0;i<all_misses.size();i++)
+        {
+            all_misses[i]->get_correlated_candidates(next, candidates, settings, dynamic_cfg);
+            for(auto it: candidates)
+            {
+                if(it==next)continue;
+                if(candidate_counts.find(it)==candidate_counts.end())candidate_counts[it]=1;
+                else candidate_counts[it]+=1;
+            }
+        }
+        vector<Candidate> sorted_candidates;
+        for(auto it: candidate_counts)
+        {
+            sorted_candidates.push_back(Candidate(it.first, it.second));
+        }
+        sort(sorted_candidates.begin(),sorted_candidates.end());
+        reverse(sorted_candidates.begin(),sorted_candidates.end());
+        if(sorted_candidates.size()<1)return false;
+        *result = sorted_candidates[0].predecessor_bbl_address;
+        *covered_miss_count = sorted_candidates[0].covered_miss_ratio_to_predecessor_count;
+        sorted_candidates.clear();
+        candidate_counts.clear();
+        return true;
     }
 };
 
@@ -496,6 +608,52 @@ public:
             //if(current_running_count >= permissible_prefetch_count)break;
         }
         candidates.clear();
+
+        vector<multi_bbl_benefit> multi_bbl_candidates;
+
+        for(int i =0; i<sorted_miss_pcs.size(); i++)
+        {
+            uint64_t missed_pc = sorted_miss_pcs[i].second;
+            /*uint64_t still_missing = missed_pc_to_LBR_sample_list[missed_pc]->size();
+            out<<missed_pc<<","<<still_missing<<endl;*/
+            vector<uint64_t> top_candidate;
+            bool candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_candidate(top_candidate,settings,dynamic_cfg);
+            if(candidate_found == false)continue;
+            for(int j =0;j<top_candidate.size();j++)
+            {    
+                uint64_t next_candidate;
+                uint64_t covered_miss_count;
+                uint64_t dynamic_prefetch_counts;
+                bool second_candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_correlated_candidate(&next_candidate,&covered_miss_count,top_candidate[j],settings,dynamic_cfg);
+                if(second_candidate_found == false)continue;
+                double fan_in_combined = dynamic_cfg->get_fan_in_for_multiple_prior_bbls(missed_pc,top_candidate[j],next_candidate,&dynamic_prefetch_counts);
+                if(fan_in_combined>=0.99)
+                {
+                    multi_bbl_candidates.push_back(multi_bbl_benefit(missed_pc,top_candidate[j],next_candidate,covered_miss_count,fan_in_combined,dynamic_prefetch_counts));
+                }
+            }
+        }
+        sort(multi_bbl_candidates.begin(),multi_bbl_candidates.end());
+        reverse(multi_bbl_candidates.begin(),multi_bbl_candidates.end());
+
+        for(int i = 0; i< multi_bbl_candidates.size(); i++)
+        {
+            multi_bbl_benefit &best_candidate = multi_bbl_candidates[i];
+            uint64_t prefetch_candidate_predecessor = best_candidate.predecessor_bbl_address;
+            uint64_t prefetch_candidate_predicate = best_candidate.predicate_bbl_address;
+            uint64_t missed_pc = best_candidate.missed_bbl_address;
+            uint64_t covered_miss_count = best_candidate.covered_miss_counts;
+            uint64_t inserted_prefetch_count = best_candidate.dynamic_prefetch_counts;
+
+            current_running_count += inserted_prefetch_count;
+            total_covered_miss_count+=covered_miss_count;
+
+            out<<"CS,"<<prefetch_candidate_predicate<<","<<prefetch_candidate_predecessor<<","<<missed_pc<<endl;
+        }
+
+        multi_bbl_candidates.clear();
+
+
         uint64_t static_prefetch_count = 0;
 
         uint8_t size_of_prefetch_inst = (7+((settings->max_prefetch_length*1)/8));
@@ -505,13 +663,6 @@ public:
         uint64_t total_size = dynamic_cfg->get_static_size();
         double static_prefetch_size = static_prefetch_count*size_of_prefetch_inst;
         cerr<<"Static size: "<<static_prefetch_size<<","<<total_size<<","<<(100.0*static_prefetch_size)/total_size<<endl;
-
-        for(int i =0; i<sorted_miss_pcs.size(); i++)
-        {
-            uint64_t missed_pc = sorted_miss_pcs[i].second;
-            /*uint64_t still_missing = missed_pc_to_LBR_sample_list[missed_pc]->size();
-            out<<missed_pc<<","<<still_missing<<endl;*/
-        }
     }
 };
 
