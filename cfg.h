@@ -12,16 +12,6 @@ using namespace std;
 #include "convert.h"
 #include "settings.h"
 
-
-bool is_present(deque<uint64_t> &last_eight_bbls, uint64_t prior)
-{
-    for(uint64_t i = 0; i< last_eight_bbls.size(); i++)
-    {
-        if(last_eight_bbls[i]==prior)return true;
-    }
-    return false;
-}
-
 class BBL
 {
 public:
@@ -142,7 +132,7 @@ public:
             parsed.clear();
         }
         raw_bbl_info_data.clear();
-        
+
         full_ordered_bbls.clear();
         string bbl_log_path = conf.lookup("bbl_log", "/tmp/");
         if(bbl_log_path == "/tmp/")
@@ -229,7 +219,7 @@ public:
                 }
                 else // if(settings.multiline_mode == 2) OUR
                 {
-                    current_distance+=bbl_infos[full_ordered_bbls[j-1]]->average_cycles;//ordered_bbl_trace[j].second;
+                    current_distance+=bbl_infos[full_ordered_bbls[j-1]]->average_cycles;
                 }
                 if(current_distance<min_distance)continue;
                 if(current_distance>max_distance)break;
