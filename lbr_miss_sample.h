@@ -316,9 +316,10 @@ public:
         *result = sorted_candidates[0].predecessor_bbl_address;
         return true;
     }
-    bool get_top_candidate(vector<uint64_t> &result, Settings *settings, CFG *dynamic_cfg)
+    bool get_top_candidate(vector<uint64_t> &result, vector<uint64_t> &result_counts, Settings *settings, CFG *dynamic_cfg)
     {
         result.clear();
+        result_counts.clear();
         unordered_map<uint64_t,uint64_t> candidate_counts;
         set<uint64_t> candidates;
         for(uint64_t i=0;i<all_misses.size();i++)
@@ -338,7 +339,11 @@ public:
         sort(sorted_candidates.begin(),sorted_candidates.end());
         reverse(sorted_candidates.begin(),sorted_candidates.end());
         if(sorted_candidates.size()<1)return false;
-        for(int i=0;i<sorted_candidates.size();i++)result.push_back(sorted_candidates[i].predecessor_bbl_address);
+        for(int i=0;i<sorted_candidates.size();i++)
+        {
+            result.push_back(sorted_candidates[i].predecessor_bbl_address);
+            result_counts.push_back(sorted_candidates[i].covered_miss_ratio_to_predecessor_count);
+        }
         sorted_candidates.clear();
         candidate_counts.clear();
         return true;
@@ -380,7 +385,7 @@ public:
         }
         return total;
     }
-    bool get_top_correlated_candidate(uint64_t *result, uint64_t *covered_miss_count, uint64_t next, Settings *settings, CFG *dynamic_cfg)
+    bool get_top_correlated_candidate(uint64_t *result, uint64_t *covered_miss_count, uint64_t next, uint64_t next_count, Settings *settings, CFG *dynamic_cfg)
     {
         unordered_map<uint64_t,uint64_t> candidate_counts;
         set<uint64_t> candidates;
@@ -402,6 +407,7 @@ public:
         sort(sorted_candidates.begin(),sorted_candidates.end());
         reverse(sorted_candidates.begin(),sorted_candidates.end());
         if(sorted_candidates.size()<1)return false;
+        if(sorted_candidates[0].covered_miss_ratio_to_predecessor_count < next_count)return false;
         *result = sorted_candidates[0].predecessor_bbl_address;
         *covered_miss_count = sorted_candidates[0].covered_miss_ratio_to_predecessor_count;
         sorted_candidates.clear();
@@ -564,9 +570,9 @@ public:
             for(auto it : candidate_counts)
             {
                 uint64_t predecessor_bbl_address = it.first;
-                if(dynamic_cfg->get_fan_out(predecessor_bbl_address,missed_pc) < 0.99)continue;
-                uint64_t miss_count = it.second;
                 double fan_in = dynamic_cfg->get_fan_out(predecessor_bbl_address, missed_pc);
+                if(fan_in < 0.99)continue;
+                uint64_t miss_count = it.second;
                 candidates.push_back(benefit(missed_pc,predecessor_bbl_address,miss_count,fan_in));
             }
             candidate_counts.clear();
@@ -611,28 +617,48 @@ public:
 
         vector<multi_bbl_benefit> multi_bbl_candidates;
 
+        uint64_t iter = 0;
+        uint64_t added = 0;
+
         for(int i =0; i<sorted_miss_pcs.size(); i++)
         {
             uint64_t missed_pc = sorted_miss_pcs[i].second;
-            /*uint64_t still_missing = missed_pc_to_LBR_sample_list[missed_pc]->size();
-            out<<missed_pc<<","<<still_missing<<endl;*/
+            //uint64_t still_missing = missed_pc_to_LBR_sample_list[missed_pc]->size();
+            //out<<missed_pc<<","<<still_missing<<endl;
             vector<uint64_t> top_candidate;
-            bool candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_candidate(top_candidate,settings,dynamic_cfg);
+            vector<uint64_t> top_candidate_counts;
+            bool candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_candidate(top_candidate,top_candidate_counts,settings,dynamic_cfg);
             if(candidate_found == false)continue;
             for(int j =0;j<top_candidate.size();j++)
             {    
                 uint64_t next_candidate;
                 uint64_t covered_miss_count;
                 uint64_t dynamic_prefetch_counts;
-                bool second_candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_correlated_candidate(&next_candidate,&covered_miss_count,top_candidate[j],settings,dynamic_cfg);
+                bool second_candidate_found = missed_pc_to_LBR_sample_list[missed_pc]->get_top_correlated_candidate(&next_candidate,&covered_miss_count,top_candidate[j], top_candidate_counts[j], settings,dynamic_cfg);
                 if(second_candidate_found == false)continue;
                 double fan_in_combined = dynamic_cfg->get_fan_in_for_multiple_prior_bbls(missed_pc,top_candidate[j],next_candidate,&dynamic_prefetch_counts);
+                iter+=1;
                 if(fan_in_combined>=0.99)
                 {
                     multi_bbl_candidates.push_back(multi_bbl_benefit(missed_pc,top_candidate[j],next_candidate,covered_miss_count,fan_in_combined,dynamic_prefetch_counts));
+                    added+=1;
                 }
+                /*if(iter==100000)
+                {
+                    cerr<<j<<endl;
+                    break;
+                }*/
             }
+            /*if(iter==100000)
+            {
+                cerr<<i<<endl;
+                break;
+            }*/
         }
+
+        cerr<<iter<<","<<added<<endl;
+        //cerr<<iter<<endl;
+
         sort(multi_bbl_candidates.begin(),multi_bbl_candidates.end());
         reverse(multi_bbl_candidates.begin(),multi_bbl_candidates.end());
 

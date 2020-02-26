@@ -75,6 +75,7 @@ private:
     Settings *sim_settings;
     set<uint64_t> self_modifying_bbls;
     vector<uint64_t> full_ordered_bbls;
+    unordered_map<uint64_t,vector<uint64_t>> bbl_locations_in_the_ordered_log;
 public:
     CFG(MyConfigWrapper &conf, Settings &settings)
     {
@@ -213,6 +214,11 @@ public:
             {
                 bbl_infos[bbl_address]->increment();
             }
+            if(bbl_locations_in_the_ordered_log.find(bbl_address)==bbl_locations_in_the_ordered_log.end())
+            {
+                bbl_locations_in_the_ordered_log[bbl_address]=vector<uint64_t>();
+            }
+            bbl_locations_in_the_ordered_log[bbl_address].push_back(i);
             uint64_t current_distance = 0;
             set<uint64_t> already_added_neighbors;
             for(uint64_t j = i+1; j < full_ordered_bbls.size(); j++)
@@ -285,20 +291,31 @@ public:
     }
     double get_fan_in_for_multiple_prior_bbls(uint64_t miss_target, uint64_t candidate, uint64_t prior, uint64_t *dynamic_prefetch_counts)
     {
-        deque<uint64_t> last_eight_bbls;
+        if(bbl_locations_in_the_ordered_log.find(candidate)==bbl_locations_in_the_ordered_log.end())return 0;
         uint64_t down = 0;
         uint64_t up = 0;
 
         uint64_t min_distance = sim_settings->get_min_distance();
         uint64_t max_distance = sim_settings->get_max_distance();
-        for(uint64_t i = 0; i<full_ordered_bbls.size(); i++)
+        for(uint64_t i = 0; i<bbl_locations_in_the_ordered_log[candidate].size(); i++)
         {
-            if(full_ordered_bbls[i]==candidate && is_present(last_eight_bbls,prior))
+            uint64_t index = bbl_locations_in_the_ordered_log[candidate][i];
+            bool prior_found = false;
+            for(int j = index - 1; ((j > index - 9) && (j > -1)); j--)
+            {
+                //last_eight_bbls.insert(full_ordered_bbls[j]);
+                if(full_ordered_bbls[j]==prior)
+                {
+                    prior_found = true;
+                    break;
+                }
+            }
+            if(prior_found)
             {
                 down+=1;
 
                 uint64_t current_distance = 0;
-                for(uint64_t j = i+1; j < full_ordered_bbls.size(); j++)
+                for(uint64_t j = index+1; j < full_ordered_bbls.size(); j++)
                 {
                     if(sim_settings->multiline_mode == 1)//ASMDB
                     {
@@ -317,11 +334,6 @@ public:
                     }
                 }
             }
-            if(last_eight_bbls.size()==8)
-            {
-                last_eight_bbls.pop_front();
-            }
-            last_eight_bbls.push_back(full_ordered_bbls[i]);
         }
         *dynamic_prefetch_counts = down;
         if(down==0 || up==0)return 0;
